@@ -3,20 +3,25 @@ import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class App {
     private static Connection db; // ★ SQLite????
 
     private static void initializeDatabase() throws SQLException { // ★ Add and migrate deadline column
         db = DriverManager.getConnection("jdbc:sqlite:todos.db"); // ★ Add and migrate deadline column
-        try (PreparedStatement s = db.prepareStatement("CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY, title TEXT, done INTEGER, deadline TEXT, registered_date TEXT, start_date TEXT, deleted INTEGER DEFAULT 0)")) { // ★ Add and migrate deadline column
+        try (PreparedStatement s = db.prepareStatement("CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY, title TEXT, done INTEGER, deadline TEXT, registered_date TEXT, start_date TEXT, deleted INTEGER DEFAULT 0, parent_id INTEGER)")) { // ★ Add and migrate deadline column
             s.executeUpdate(); // ★ Add and migrate deadline column
         }
         boolean hasDeadline = false; // ★ Add and migrate deadline column
@@ -51,6 +56,13 @@ public class App {
         if (!hasDeleted) {
             try (PreparedStatement s = db.prepareStatement("ALTER TABLE todos ADD COLUMN deleted INTEGER DEFAULT 0")) { s.executeUpdate(); }
         }
+        boolean hasParentId = false;
+        try (PreparedStatement s = db.prepareStatement("PRAGMA table_info(todos)"); ResultSet rs = s.executeQuery()) {
+            while (rs.next()) if ("parent_id".equals(rs.getString("name"))) hasParentId = true;
+        }
+        if (!hasParentId) {
+            try (PreparedStatement s = db.prepareStatement("ALTER TABLE todos ADD COLUMN parent_id INTEGER")) { s.executeUpdate(); }
+        }
         try (PreparedStatement s = db.prepareStatement("UPDATE todos SET deleted = 0 WHERE deleted IS NULL")) { s.executeUpdate(); }
         try (PreparedStatement s = db.prepareStatement("UPDATE todos SET registered_date = date('now','localtime') WHERE registered_date IS NULL OR registered_date = ''")) { s.executeUpdate(); }
         try (PreparedStatement s = db.prepareStatement("UPDATE todos SET start_date = '' WHERE start_date IS NULL")) { s.executeUpdate(); }
@@ -60,7 +72,7 @@ public class App {
     }
 
     private static synchronized void addTodo(String title, String startDate, String deadline) throws SQLException { // ★ SQLite????
-        try (PreparedStatement s = db.prepareStatement("INSERT INTO todos (title, done, registered_date, start_date, deadline) VALUES (?, 0, date('now','localtime'), ?, ?)")) { // ★ SQLite????
+        try (PreparedStatement s = db.prepareStatement("INSERT INTO todos (title, done, registered_date, start_date, deadline, parent_id) VALUES (?, 0, date('now','localtime'), ?, ?, NULL)")) { // ★ SQLite????
             s.setString(1, title); // ★ SQLite????
             s.setString(2, startDate);
             s.setString(3, deadline);
@@ -68,8 +80,17 @@ public class App {
         }
     }
 
+    private static synchronized boolean addSubtask(String title, String deadline, int parentId) throws SQLException {
+        try (PreparedStatement s = db.prepareStatement("INSERT INTO todos (title, done, registered_date, start_date, deadline, deleted, parent_id) SELECT ?, 0, date('now','localtime'), '', ?, 0, id FROM todos WHERE id = ? AND deleted = 0 AND parent_id IS NULL")) {
+            s.setString(1, title);
+            s.setString(2, deadline);
+            s.setInt(3, parentId);
+            return s.executeUpdate() == 1;
+        }
+    }
+
     private static synchronized void markDone(int id) throws SQLException { // ★ SQLite????
-        try (PreparedStatement s = db.prepareStatement("UPDATE todos SET done = 1 WHERE id = ?")) { // ★ SQLite????
+        try (PreparedStatement s = db.prepareStatement("UPDATE todos SET done = CASE WHEN done = 0 THEN 1 ELSE 0 END WHERE id = ? AND deleted = 0")) { // ★ SQLite????
             s.setInt(1, id); // ★ SQLite????
             s.executeUpdate(); // ★ SQLite????
         }
@@ -86,23 +107,56 @@ public class App {
     }
 
     private static synchronized Todo findTodo(int id) throws SQLException { // ★ Edit Todo title
-        try (PreparedStatement s = db.prepareStatement("SELECT id, title, done, registered_date, start_date, deadline FROM todos WHERE id = ? AND deleted = 0")) { // ★ Edit Todo title
+        try (PreparedStatement s = db.prepareStatement("SELECT id, title, done, registered_date, start_date, deadline, parent_id FROM todos WHERE id = ? AND deleted = 0")) { // ★ Edit Todo title
             s.setInt(1, id); // ★ Edit Todo title
             try (ResultSet rs = s.executeQuery()) { // ★ Edit Todo title
-                if (rs.next()) return new Todo(rs.getInt("id"), rs.getString("title"), rs.getInt("done") != 0, rs.getString("registered_date"), rs.getString("start_date"), rs.getString("deadline")); // ★ Edit Todo title
+                if (rs.next()) return new Todo(rs.getInt("id"), rs.getString("title"), rs.getInt("done") != 0, rs.getString("registered_date"), rs.getString("start_date"), rs.getString("deadline"), rs.getObject("parent_id") == null ? null : rs.getInt("parent_id")); // ★ Edit Todo title
             }
         }
         return null; // ★ Edit Todo title
     }
 
     private static synchronized void deleteTodo(int id) throws SQLException { // ★ SQLite????
-        try (PreparedStatement s = db.prepareStatement("UPDATE todos SET deleted = 1 WHERE id = ?")) { // ★ SQLite????
+        boolean parent;
+        try (PreparedStatement s = db.prepareStatement("SELECT parent_id FROM todos WHERE id = ? AND deleted = 0")) {
+            s.setInt(1, id);
+            try (ResultSet rs = s.executeQuery()) {
+                if (!rs.next()) return;
+                parent = rs.getObject("parent_id") == null;
+            }
+        }
+        String sql = parent
+                ? "UPDATE todos SET deleted = 1 WHERE id = ? OR parent_id = ?"
+                : "UPDATE todos SET deleted = 1 WHERE id = ?";
+        try (PreparedStatement s = db.prepareStatement(sql)) { // ★ SQLite????
             s.setInt(1, id); // ★ SQLite????
+            if (parent) s.setInt(2, id);
             s.executeUpdate(); // ★ SQLite????
         }
     }
 
     private static synchronized void deleteVisibleCompleted(String titleSearch, String deadlineSearch) throws SQLException { // ★ Delete completed tasks currently visible
+        StringBuilder targets = new StringBuilder("SELECT id, parent_id FROM todos WHERE done = 1 AND deleted = 0");
+        if (!titleSearch.trim().isEmpty()) targets.append(" AND title LIKE ?");
+        if (!deadlineSearch.trim().isEmpty()) targets.append(" AND deadline LIKE ?");
+        Set<Integer> parentIds = new HashSet<>();
+        String targetSql = targets.toString();
+        try (PreparedStatement s = db.prepareStatement(targetSql)) {
+            int parameter = 1;
+            if (!titleSearch.trim().isEmpty()) s.setString(parameter++, "%" + titleSearch + "%");
+            if (!deadlineSearch.trim().isEmpty()) s.setString(parameter++, "%" + deadlineSearch + "%");
+            try (ResultSet rs = s.executeQuery()) {
+                while (rs.next()) {
+                    if (rs.getObject("parent_id") == null) parentIds.add(rs.getInt("id"));
+                }
+            }
+        }
+        for (int parentId : parentIds) {
+            try (PreparedStatement s = db.prepareStatement("UPDATE todos SET deleted = 1 WHERE parent_id = ?")) {
+                s.setInt(1, parentId);
+                s.executeUpdate();
+            }
+        }
         StringBuilder sql = new StringBuilder("UPDATE todos SET deleted = 1 WHERE done = 1 AND deleted = 0"); // ★ Delete completed tasks currently visible
         if (!titleSearch.trim().isEmpty()) sql.append(" AND title LIKE ?"); // ★ Delete completed tasks currently visible
         if (!deadlineSearch.trim().isEmpty()) sql.append(" AND deadline LIKE ?"); // ★ Delete completed tasks currently visible
@@ -123,18 +177,67 @@ public class App {
         if (!titleSearch.trim().isEmpty()) condition.append(" AND ").append("title LIKE ?"); // ★ Search within selected tab
         if (!deadlineSearch.trim().isEmpty()) condition.append(" AND ").append("deadline LIKE ?"); // ★ Search within selected tab
         String direction = "desc".equals(sort) ? "DESC" : "ASC"; // ★ Search within selected tab
-        String sql = "SELECT id, title, done, registered_date, start_date, deadline FROM todos" + condition + " ORDER BY id " + direction; // ★ Search within selected tab
+        String orderBy = "all".equals(filter)
+                ? " ORDER BY CASE WHEN done = 0 AND (start_date IS NULL OR TRIM(start_date) = '') THEN 0 WHEN done = 0 AND start_date IS NOT NULL AND TRIM(start_date) <> '' THEN 1 ELSE 2 END, id " + direction
+                : " ORDER BY id " + direction;
+        String sql = "SELECT id, title, done, registered_date, start_date, deadline, parent_id FROM todos" + condition + orderBy; // ? Search within selected tab
         try (PreparedStatement s = db.prepareStatement(sql)) { // ★ Search within selected tab
             int parameter = 1; // ★ Search within selected tab
             if (!titleSearch.trim().isEmpty()) s.setString(parameter++, "%" + titleSearch + "%"); // ★ Search within selected tab
             if (!deadlineSearch.trim().isEmpty()) s.setString(parameter++, "%" + deadlineSearch + "%"); // ★ Search within selected tab
             try (ResultSet rs = s.executeQuery()) { // ★ Search within selected tab
                 while (rs.next()) { // ★ Search within selected tab
-                    todos.add(new Todo(rs.getInt("id"), rs.getString("title"), rs.getInt("done") != 0, rs.getString("registered_date"), rs.getString("start_date"), rs.getString("deadline"))); // ★ Search within selected tab
+                    todos.add(new Todo(rs.getInt("id"), rs.getString("title"), rs.getInt("done") != 0, rs.getString("registered_date"), rs.getString("start_date"), rs.getString("deadline"), rs.getObject("parent_id") == null ? null : rs.getInt("parent_id"))); // ★ Search within selected tab
                 }
             }
         }
         return todos; // ★ Search within selected tab
+    }
+
+    private static List<Todo> organizeTodos(List<Todo> todos) {
+        List<Todo> ordered = new ArrayList<>();
+        for (Todo parent : todos) {
+            if (parent.getParentId() != null) continue;
+            ordered.add(parent);
+            for (Todo candidate : todos) {
+                if (parent.getId() == (candidate.getParentId() == null ? -1 : candidate.getParentId())) ordered.add(candidate);
+            }
+        }
+        for (Todo todo : todos) if (!ordered.contains(todo)) ordered.add(todo);
+        return ordered;
+    }
+
+    private static List<Todo> loadTodosForDisplay(String filter, String sort, String titleSearch, String deadlineSearch,
+                                                   Set<Integer> contextOnlyIds) throws SQLException {
+        List<Todo> matches = loadTodos(filter, sort, titleSearch, deadlineSearch);
+        if ("all".equals(filter) && titleSearch.trim().isEmpty() && deadlineSearch.trim().isEmpty()) {
+            return organizeTodos(matches);
+        }
+
+        List<Todo> display = new ArrayList<>(matches);
+        Set<Integer> matchingIds = new HashSet<>();
+        for (Todo todo : matches) matchingIds.add(todo.getId());
+        Set<Integer> neededParents = new HashSet<>();
+        for (Todo todo : matches) {
+            if (todo.getParentId() != null && !matchingIds.contains(todo.getParentId())) neededParents.add(todo.getParentId());
+        }
+        for (int parentId : neededParents) {
+            Todo parent = findTodo(parentId);
+            if (parent != null) {
+                display.add(parent);
+                contextOnlyIds.add(parentId);
+            }
+        }
+        Comparator<Todo> byId = Comparator.comparingInt(Todo::getId);
+        if ("desc".equals(sort)) byId = byId.reversed();
+        if ("all".equals(filter)) {
+            Comparator<Todo> byCategory = Comparator.comparingInt(todo -> todo.isDone() ? 2
+                    : (todo.getStartDate() == null || todo.getStartDate().trim().isEmpty() ? 0 : 1));
+            display.sort(byCategory.thenComparing(byId));
+        } else {
+            display.sort(byId);
+        }
+        return organizeTodos(display);
     }
 
     public static void main(String[] args) throws Exception {
@@ -144,9 +247,42 @@ public class App {
             String path = exchange.getRequestURI().getPath();
             String method = exchange.getRequestMethod();
             String message;
+            if ("/todo.css".equals(path) || "/todo.js".equals(path)
+                    || path.startsWith("/static/assets/")) {
+                String assetName = path.substring(path.lastIndexOf('/') + 1);
+                if (path.startsWith("/static/assets/") && !Set.of("cat-header.png", "cat-pencil-cup.png", "cat-sidebar.png", "paw-duo.png", "paw.png", "done-stamp.png", "pink-tape.png", "ribbon.png").contains(assetName)) {
+                    exchange.sendResponseHeaders(404, -1);
+                    exchange.close();
+                    return;
+                }
+                Path asset = path.startsWith("/static/assets/")
+                        ? Path.of("static", "assets", assetName)
+                        : Path.of("static", path.substring(1));
+                byte[] assetBody = Files.readAllBytes(asset);
+                exchange.getResponseHeaders().set("Content-Type", path.endsWith(".css") ? "text/css; charset=UTF-8"
+                        : path.endsWith(".js") ? "application/javascript; charset=UTF-8" : "image/png");
+                exchange.sendResponseHeaders(200, assetBody.length);
+                exchange.getResponseBody().write(assetBody);
+                exchange.close();
+                return;
+            }
             exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=UTF-8");
             try { // ★ SQLite????
-                if (path.equals("/add") && method.equals("POST")) {
+                if (path.equals("/add-subtask") && method.equals("POST")) {
+                    String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                    String title = URLDecoder.decode(queryValue(body, "todo"), StandardCharsets.UTF_8);
+                    String deadline = URLDecoder.decode(queryValue(body, "deadline"), StandardCharsets.UTF_8);
+                    int parentId = requestedParentId(body);
+                    String error = "";
+                    if (title.trim().isEmpty()) error = "todo";
+                    else if (deadline.trim().isEmpty()) error = "deadline";
+                    else if (parentId <= 0 || !addSubtask(title, deadline, parentId)) error = "parent";
+                    if (error.isEmpty()) exchange.getResponseHeaders().set("Location", "/");
+                    else exchange.getResponseHeaders().set("Location", "/?error=" + error + formValues(title, deadline) + "&parentId=" + parentId);
+                    exchange.sendResponseHeaders(303, -1);
+                    exchange.close();
+                    return;
+                } else if (path.equals("/add") && method.equals("POST")) {
                     String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                     String title = URLDecoder.decode(queryValue(body, "todo"), StandardCharsets.UTF_8);
                     String deadline = URLDecoder.decode(queryValue(body, "deadline"), StandardCharsets.UTF_8);
@@ -252,56 +388,60 @@ public class App {
                     String deadlineSearch = URLDecoder.decode(queryValue(query, "deadlineSearch"), StandardCharsets.UTF_8);
                     String searchParams = searchQuery(titleSearch, deadlineSearch);
                     String htmlSearchParams = searchParams.replace("&", "&amp;");
-                    List<Todo> todos = loadTodos(filter, sort, titleSearch, deadlineSearch);
+                    Set<Integer> contextOnlyIds = new HashSet<>();
+                    List<Todo> todos = loadTodosForDisplay(filter, sort, titleSearch, deadlineSearch, contextOnlyIds);
                     int doneCount = 0;
                     for (Todo todo : todos) {
                         if (todo.isDone()) doneCount++;
                     }
-                    StringBuilder html = new StringBuilder();
+                    StringBuilder html = new StringBuilder("<!doctype html><html lang='ja'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>○○さんのやることリスト</title><link rel='preconnect' href='https://fonts.googleapis.com'><link rel='preconnect' href='https://fonts.gstatic.com' crossorigin><link href='https://fonts.googleapis.com/css2?family=Hachi+Maru+Pop&display=swap' rel='stylesheet'><link rel='stylesheet' href='/todo.css'></head><body><div class='app-shell'><aside class='sidebar'><div class='brand-mark'><img src='/static/assets/paw.png' alt=''></div><nav><span class='nav-item inactive'><span>⌂</span>ホーム</span><span class='nav-item active'><span class='active-paw'><img src='/static/assets/paw.png' alt=''></span>やることリスト</span><span class='nav-item inactive'><span>▦</span>カレンダー</span><span class='nav-item inactive'><span>▤</span>ノート</span><span class='nav-item inactive'><span>◷</span>統計・ふりかえり</span><span class='nav-item inactive'><span>⚙</span>設定</span></nav><img class='sidebar-cat' src='/static/assets/cat-sidebar.png' alt='本のそばに座る猫'></aside><main class='main-content'><header class='page-header'><img class='header-tape' src='/static/assets/pink-tape.png' alt=''><img class='header-ribbon' src='/static/assets/ribbon.png' alt=''><img class='header-paw' src='/static/assets/paw-duo.png' alt=''><img class='header-cat' src='/static/assets/cat-header.png' alt='本の上で眠る三毛猫'><h1>○○さんのやることリスト</h1></header><section class='toolbar-card'><img class='toolbar-cat' src='/static/assets/cat-pencil-cup.png' alt='ペン立てのそばの猫'>");
                     String error = queryValue(query, "error");
                     String formTitle = error.isEmpty() ? titleSearch : URLDecoder.decode(queryValue(query, "todo"), StandardCharsets.UTF_8);
                     String formDeadline = error.isEmpty() ? deadlineSearch : URLDecoder.decode(queryValue(query, "deadline"), StandardCharsets.UTF_8);
-                    if ("todo".equals(error)) html.append("<p style='color:red;font-weight:bold'>\u300c\u3084\u308b\u3053\u3068\u300d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044</p>");
-                    if ("deadline".equals(error)) html.append("<p style='color:red;font-weight:bold'>\u300c\u7de0\u5207\u65e5\u300d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044</p>");
-                    html.append("<form method='post' action='/add' novalidate><div style='display:flex;gap:12px;align-items:end'>")
+                    if ("todo".equals(error)) html.append("<p class='form-error'>\u300c\u3084\u308b\u3053\u3068\u300d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044</p>");
+                    if ("deadline".equals(error)) html.append("<p class='form-error'>\u300c\u7de0\u5207\u65e5\u300d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044</p>");
+                    if ("parent".equals(error)) html.append("<p class='form-error'>\u89aa\u30bf\u30b9\u30af\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044</p>");
+                    html.append("<form class='todo-toolbar' method='post' action='/add' novalidate><input type='hidden' id='selectedTaskId'><input type='hidden' id='selectedParentId' name='parentId' value=''><div class='input-row'>")
                         .append("<label>\u3084\u308b\u3053\u3068<br><input name='todo' value='").append(escapeHtml(formTitle)).append("'></label>")
                         .append("<label>\u7de0\u5207\u65e5<br><input name='deadline' placeholder='10/13' value='").append(escapeHtml(formDeadline)).append("'></label>")
-                        .append("<button type='button' onclick='this.form.querySelector(&quot;[name=todo]&quot;).value=&quot;&quot;;this.form.querySelector(&quot;[name=deadline]&quot;).value=&quot;&quot;'>\u30af\u30ea\u30a2</button><button>\u4fdd\u5b58</button>")
-                        .append("<button type='button' id='deleteModeButton' onclick=\"var boxes=document.querySelectorAll('.delete-selection');if(this.dataset.active!=='true'){boxes.forEach(function(b){b.style.display='inline'});this.dataset.active='true';this.textContent='\\u9078\\u629e\\u3057\\u305f\\u884c\\u3092\\u524a\\u9664';}else{var form=document.getElementById('deleteForm');if(!document.querySelector('.delete-selection:checked')){alert('\\u884c\\u3092\\u9078\\u629e\\u3057\\u3066\\u304f\\u3060\\u3055\\u3044');return;}document.getElementById('deleteCount').textContent=document.querySelectorAll('.delete-selection:checked').length;document.getElementById('deleteConfirm').style.display='flex';}\">\u524a\u9664</button>")
-                        .append("<button type='button' onclick=\"window.location.href='/?filter=").append(filter).append("&amp;sort=").append(sort).append("&amp;titleSearch='+encodeURIComponent(this.form.todo.value)+'&amp;deadlineSearch='+encodeURIComponent(this.form.deadline.value)\">\u691c\u7d22</button></div></form>");
-                    html.append("<div style='display:flex;justify-content:space-between;align-items:center;gap:12px'><div><a href='/?filter=all&amp;sort=desc").append(htmlSearchParams).append("'>\u5168\u90e8</a> | ")
-                        .append("<a href='/?filter=todo&amp;sort=desc").append(htmlSearchParams).append("'>\u3084\u308b\u3053\u3068</a> | ")
-                        .append("<a href='/?filter=doing&amp;sort=desc").append(htmlSearchParams).append("'>\u3084\u3063\u3066\u308b\u3053\u3068</a> | ")
-                        .append("<a href='/?filter=done&amp;sort=desc").append(htmlSearchParams).append("'>\u3084\u3063\u305f\u3053\u3068</a></div>");
-                    html.append("</div>");
+                        .append("<div class='action-buttons'><button class='btn btn-save'>\u767b\u9332</button><button class='btn btn-subtask' type='submit' id='subtaskButton' formaction='/add-subtask' disabled>\u30b5\u30d6\u30bf\u30b9\u30af\u767b\u9332</button>")
+                        .append("<button class='btn btn-search' type='button' id='searchButton'>\u691c\u7d22</button><button class='btn btn-edit' type='button' id='editButton'>\u7de8\u96c6</button><button class='btn btn-delete' type='button' id='deleteButton'>\u524a\u9664</button></div><div id='selectedTask' class='selected-task'><img src='/static/assets/paw.png' alt=''> \u9078\u629e\u4e2d\uff1a\u306a\u3057</div></div></form></section>");
+                    html.append("<nav class='todo-tabs'><a class='tab tab-all").append("all".equals(filter) ? " active" : "").append("' href='/?filter=all&amp;sort=desc'>\u5168\u90e8</a>")
+                        .append("<a class='tab tab-todo").append("todo".equals(filter) ? " active" : "").append("' href='/?filter=todo&amp;sort=desc'>\u3084\u308b\u3053\u3068</a>")
+                        .append("<a class='tab tab-doing").append("doing".equals(filter) ? " active" : "").append("' href='/?filter=doing&amp;sort=desc'>\u3084\u3063\u3066\u308b\u3053\u3068</a>")
+                        .append("<a class='tab tab-done").append("done".equals(filter) ? " active" : "").append("' href='/?filter=done&amp;sort=desc'>\u3084\u3063\u305f\u3053\u3068</a></nav><section class='list-card'>");
                     if ("desc".equals(sort)) {
-                        html.append("<p><a href='/?filter=").append(filter).append("&amp;sort=asc").append(htmlSearchParams).append("'>\u53e4\u3044\u9806</a></p>");
+                    html.append("<p class='sort-control'><a href='/?filter=").append(filter).append("&amp;sort=asc").append(htmlSearchParams).append("'>\u53e4\u3044\u9806</a></p>");
                     } else {
-                        html.append("<p><a href='/?filter=").append(filter).append("&amp;sort=desc").append(htmlSearchParams).append("'>\u65b0\u3057\u3044\u9806</a></p>");
+                    html.append("<p class='sort-control'><a href='/?filter=").append(filter).append("&amp;sort=desc").append(htmlSearchParams).append("'>\u65b0\u3057\u3044\u9806</a></p>");
                     }
                     html.append("<form id='deleteForm' method='post' action='/delete-selected'>")
-                        .append("<input type='hidden' name='titleSearch' value='").append(escapeHtml(titleSearch)).append("'><input type='hidden' name='deadlineSearch' value='").append(escapeHtml(deadlineSearch)).append("'></form>")
-                        .append("<div style='display:grid;grid-template-columns:55px minmax(180px,2fr) 130px 130px 130px;gap:8px;font-weight:bold;border-bottom:1px solid #888;padding:6px 0'>")
+                        .append("<input type='hidden' name='deleteIds' id='deleteTaskId'><input type='hidden' name='filter' value='").append(filter).append("'><input type='hidden' name='sort' value='").append(sort).append("'><input type='hidden' name='titleSearch' value='").append(escapeHtml(titleSearch)).append("'><input type='hidden' name='deadlineSearch' value='").append(escapeHtml(deadlineSearch)).append("'></form>")
+                        .append("<div class='todo-table'><div class='todo-header'>")
                         .append("<span>\u2611</span><span>\u5185\u5bb9</span><span>\u767b\u9332\u65e5</span><span>\u958b\u59cb\u65e5</span><span>\u7de0\u5207\u65e5</span></div>")
-                        .append("<ul style='list-style:none;padding-left:0'>");
+                        .append("<ul class='todo-list'>");
                     for (Todo todo : todos) {
-                        html.append("<li style='display:grid;grid-template-columns:55px minmax(180px,2fr) 130px 130px 130px;gap:8px;align-items:center;padding:5px 0'>")
-                            .append("<span><input class='delete-selection' type='checkbox' name='deleteIds' value='").append(todo.getId()).append("' form='deleteForm' style='display:none'> <a href='/done?id=").append(todo.getId()).append("&amp;filter=").append(filter).append("&amp;sort=").append(sort).append(htmlSearchParams).append("'>").append(todo.isDone() ? "\u2611" : "\u2610").append("</a></span>")
-                            .append("<span><a href='#' onclick=\"this.style.display='none';this.nextElementSibling.style.display='inline';return false\">").append(escapeHtml(todo.getTitle())).append("</a>")
-                            .append("<form method='post' action='/edit' style='display:none'>")
-                            .append("<input type='hidden' name='titleSearch' value='").append(escapeHtml(titleSearch)).append("'><input type='hidden' name='deadlineSearch' value='").append(escapeHtml(deadlineSearch)).append("'>")
-                            .append("<input name='todo' value='").append(escapeHtml(todo.getTitle())).append("' style='width:180px'> ")
-                            .append("<input name='startDate' value='").append(escapeHtml(todo.getStartDate())).append("' placeholder='\u958b\u59cb\u65e5' style='width:90px'> ")
-                            .append("<input name='deadline' value='").append(escapeHtml(todo.getDeadline())).append("' placeholder='\u7de0\u5207\u65e5' style='width:90px'> ")
-                            .append("<button>\u4fdd\u5b58</button><button type='button' onclick=\"this.form.style.display='none';this.form.previousElementSibling.style.display='inline'\">\u53d6\u6d88</button></form></span>")
+                        boolean contextOnly = contextOnlyIds.contains(todo.getId());
+                        String statusClass = todo.isDone() ? "status-done" : (todo.getStartDate() == null || todo.getStartDate().trim().isEmpty() ? "status-todo" : "status-doing");
+                        html.append("<li class='todo-row ").append(statusClass).append(" ").append(todo.getParentId() == null ? "parent-row" : "subtask-row").append(contextOnly ? " context-only" : " selectable-row").append("' data-id='").append(todo.getId()).append("' data-parent='").append(todo.getParentId() == null).append("' data-title='").append(escapeHtml(todo.getTitle())).append("' data-start='").append(escapeHtml(todo.getStartDate())).append("' data-deadline='").append(escapeHtml(todo.getDeadline())).append("'")
+                            .append(">")
+                            .append("<span>");
+                        if (!contextOnly) {
+                            html.append("<a class='completion-toggle' href='/done?id=").append(todo.getId()).append("&amp;filter=").append(filter).append("&amp;sort=").append(sort).append(htmlSearchParams).append("'>").append(todo.isDone() ? "\u2611" : "\u2610").append("</a>");
+                        }
+                        html.append("</span><span class='task-content'>");
+                        if (todo.isDone()) html.append("<img class='done-stamp' src='/static/assets/done-stamp.png' alt='済'>");
+                        html.append("<span class='task-title'>").append(escapeHtml(todo.getTitle())).append("</span></span>")
                             .append("<span>").append(escapeHtml(todo.getRegisteredDate())).append("</span><span>").append(escapeHtml(todo.getStartDate())).append("</span><span>").append(escapeHtml(todo.getDeadline())).append("</span></li>");
                     }
-                    html.append("</ul>");
-                    html.append("<div id='deleteConfirm' style='display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);align-items:center;justify-content:center'>")
-                        .append("<div style='background:white;padding:24px;border-radius:8px;box-shadow:0 4px 16px #555;text-align:center'>")
-                        .append("<p><span id='deleteCount'>0</span>\u4ef6\u3092\u524a\u9664\u3057\u307e\u3059\u3002\u3088\u308d\u3057\u3044\u3067\u3059\u304b\uff1f</p>")
-                        .append("<button type='button' onclick=\"document.getElementById('deleteForm').submit()\">\u524a\u9664</button> ")
-                        .append("<button type='button' onclick=\"document.getElementById('deleteConfirm').style.display='none';document.querySelectorAll('.delete-selection').forEach(function(b){b.checked=false;b.style.display='none'});var button=document.getElementById('deleteModeButton');button.dataset.active='false';button.textContent='\\u524a\\u9664'\">\u30ad\u30e3\u30f3\u30bb\u30eb</button></div></div>");
+                    html.append("</ul></div>");
+                    html.append("<form id='editForm' method='post' action='/edit' class='hidden'><input type='hidden' name='id' id='editId'><input type='hidden' name='filter' value='").append(filter).append("'><input type='hidden' name='sort' value='").append(sort).append("'><input type='hidden' name='titleSearch' value='").append(escapeHtml(titleSearch)).append("'><input type='hidden' name='deadlineSearch' value='").append(escapeHtml(deadlineSearch)).append("'></form>");
+                    html.append("</section>");
+                    html.append("<div id='editDialog' class='modal-overlay hidden'><div class='modal-card'><h2>\u30bf\u30b9\u30af\u3092\u7de8\u96c6</h2><label>\u5185\u5bb9<input id='editTitle' name='todo' form='editForm' required></label><label>\u958b\u59cb\u65e5<input id='editStart' name='startDate' form='editForm'></label><label>\u7de0\u5207\u65e5<input id='editDeadline' name='deadline' form='editForm' required></label><div class='modal-actions'><button class='btn btn-neutral' type='button' data-close='editDialog'>\u30ad\u30e3\u30f3\u30bb\u30eb</button><button class='btn btn-save' type='submit' form='editForm'>\u4fdd\u5b58</button></div></div></div>");
+                    html.append("<div id='deleteConfirm' class='modal-overlay hidden'><div class='modal-card compact-card'>")
+                        .append("<p id='deleteMessage'>\u524a\u9664\u5bfe\u8c61\u3067\u3059\u3002</p>")
+                        .append("<div class='modal-actions'><button class='btn btn-neutral' type='button' data-close='deleteConfirm'>\u30ad\u30e3\u30f3\u30bb\u30eb</button><button class='btn btn-delete' type='submit' form='deleteForm'>\u524a\u9664</button></div></div></div>");
+                    html.append("<script src='/todo.js' defer></script></main></div></body></html>");
                     message = html.toString();
                     exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
                 } else { // ★ SQLite????
@@ -358,6 +498,11 @@ public class App {
         return ""; // ★ Return empty when parameter is absent
     }
 
+    private static int requestedParentId(String query) {
+        try { return Integer.parseInt(queryValue(query, "parentId")); }
+        catch (NumberFormatException e) { return -1; }
+    }
+
     private static int requestedId(String query) { // ★ Parse Todo ID
         String value = queryValue(query, "id"); // ★ Parse Todo ID
         try { // ★ Parse Todo ID
@@ -381,14 +526,16 @@ class Todo { // ★ Todo deadline field
     private final String registeredDate;
     private final String startDate;
     private final String deadline; // ★ Todo deadline field
+    private final Integer parentId;
 
-    Todo(int id, String title, boolean done, String registeredDate, String startDate, String deadline) { // ★ Todo deadline field
+    Todo(int id, String title, boolean done, String registeredDate, String startDate, String deadline, Integer parentId) { // ★ Todo deadline field
         this.id = id; // ★ Todo deadline field
         this.title = title; // ★ Todo deadline field
         this.done = done; // ★ Todo deadline field
         this.registeredDate = registeredDate;
         this.startDate = startDate;
         this.deadline = deadline; // ★ Todo deadline field
+        this.parentId = parentId;
     }
 
     int getId() { return id; } // ★ Todo deadline field
@@ -397,4 +544,5 @@ class Todo { // ★ Todo deadline field
     String getRegisteredDate() { return registeredDate; }
     String getStartDate() { return startDate; }
     String getDeadline() { return deadline; } // ★ Todo deadline field
+    Integer getParentId() { return parentId; }
 }
