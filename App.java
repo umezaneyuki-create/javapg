@@ -240,6 +240,29 @@ public class App {
         return organizeTodos(display);
     }
 
+    private static synchronized int[] loadTabCounts() throws SQLException {
+        int all = 0;
+        int todo = 0;
+        int doing = 0;
+        int done = 0;
+        try (PreparedStatement s = db.prepareStatement("SELECT done, start_date FROM todos WHERE deleted = 0");
+             ResultSet rs = s.executeQuery()) {
+            while (rs.next()) {
+                all++;
+                boolean isDone = rs.getInt("done") != 0;
+                String startDate = rs.getString("start_date");
+                if (isDone) {
+                    done++;
+                } else if (startDate == null || startDate.trim().isEmpty()) {
+                    todo++;
+                } else {
+                    doing++;
+                }
+            }
+        }
+        return new int[] { all, todo, doing, done };
+    }
+
     public static void main(String[] args) throws Exception {
         initializeDatabase(); // ★ SQLite????
         HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
@@ -250,7 +273,11 @@ public class App {
             if ("/todo.css".equals(path) || "/todo.js".equals(path)
                     || path.startsWith("/static/assets/")) {
                 String assetName = path.substring(path.lastIndexOf('/') + 1);
-                if (path.startsWith("/static/assets/") && !Set.of("cat-header.png", "cat-pencil-cup.png", "cat-sidebar.png", "paw-duo.png", "paw.png", "done-stamp.png", "pink-tape.png", "ribbon.png").contains(assetName)) {
+                if (path.startsWith("/static/assets/") && !Set.of(
+                        "cat-header.png", "cat-pencil-cup.png", "cat-sidebar.png", "paw-duo.png", "paw.png", "done-stamp.png", "pink-tape.png", "ribbon.png",
+                        "title-paper-banner.png", "speech-bubble-large-paw.png", "speech-bubble-small-paw.png",
+                        "tab-icon-cat-all-white.png", "tab-icon-cat-todo-black.png", "tab-icon-cat-doing-blue.png", "tab-icon-cat-done-cream.png",
+                        "fishbone-sticker.png", "notepad-pencil-icon.png", "bar-chart-icon.png").contains(assetName)) {
                     exchange.sendResponseHeaders(404, -1);
                     exchange.close();
                     return;
@@ -390,58 +417,98 @@ public class App {
                     String htmlSearchParams = searchParams.replace("&", "&amp;");
                     Set<Integer> contextOnlyIds = new HashSet<>();
                     List<Todo> todos = loadTodosForDisplay(filter, sort, titleSearch, deadlineSearch, contextOnlyIds);
-                    int doneCount = 0;
-                    for (Todo todo : todos) {
-                        if (todo.isDone()) doneCount++;
-                    }
-                    StringBuilder html = new StringBuilder("<!doctype html><html lang='ja'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>○○さんのやることリスト</title><link rel='preconnect' href='https://fonts.googleapis.com'><link rel='preconnect' href='https://fonts.gstatic.com' crossorigin><link href='https://fonts.googleapis.com/css2?family=Hachi+Maru+Pop&display=swap' rel='stylesheet'><link rel='stylesheet' href='/todo.css'></head><body><div class='app-shell'><aside class='sidebar'><div class='brand-mark'><img src='/static/assets/paw.png' alt=''></div><nav><span class='nav-item inactive'><span>⌂</span>ホーム</span><span class='nav-item active'><span class='active-paw'><img src='/static/assets/paw.png' alt=''></span>やることリスト</span><span class='nav-item inactive'><span>▦</span>カレンダー</span><span class='nav-item inactive'><span>▤</span>ノート</span><span class='nav-item inactive'><span>◷</span>統計・ふりかえり</span><span class='nav-item inactive'><span>⚙</span>設定</span></nav><img class='sidebar-cat' src='/static/assets/cat-sidebar.png' alt='本のそばに座る猫'></aside><main class='main-content'><header class='page-header'><img class='header-tape' src='/static/assets/pink-tape.png' alt=''><img class='header-ribbon' src='/static/assets/ribbon.png' alt=''><img class='header-paw' src='/static/assets/paw-duo.png' alt=''><img class='header-cat' src='/static/assets/cat-header.png' alt='本の上で眠る三毛猫'><h1>○○さんのやることリスト</h1></header><section class='toolbar-card'><img class='toolbar-cat' src='/static/assets/cat-pencil-cup.png' alt='ペン立てのそばの猫'>");
+                    int[] tabCounts = loadTabCounts();
+                    StringBuilder html = new StringBuilder(
+                            "<!doctype html><html lang='ja'><head><meta charset='UTF-8'>"
+                            + "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                            + "<title>○○さんのやることリスト</title>"
+                            + "<link rel='preconnect' href='https://fonts.googleapis.com'>"
+                            + "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>"
+                            + "<link href='https://fonts.googleapis.com/css2?family=Hachi+Maru+Pop&family=Noto+Sans+JP:wght@400;500;600;700&display=swap' rel='stylesheet'>"
+                            + "<link rel='stylesheet' href='/todo.css'></head><body>"
+                            + "<div class='page-frame'>"
+                            + "<header class='hero-header'>"
+                            + "<div class='hero-brand'><img class='brand-cat-mark-image' src='/static/assets/tab-icon-cat-all-white.png' alt=''><div><p class='brand-title'>ねこと、はたらく。</p><p class='brand-copy'>かわいいToDoで<br>今日もいい日に…♪</p></div></div>"
+                            + "<div class='hero-title-wrap'><img class='title-paper-image' src='/static/assets/title-paper-banner.png' alt=''><img class='title-ribbon' src='/static/assets/ribbon.png' alt=''><h1>○○さんの<br><span>やることリスト</span></h1></div>"
+                            + "<div class='hero-message'><img src='/static/assets/speech-bubble-large-paw.png' alt=''><p>やることを片づけて<br>すきなことでいっぱいの<br>毎日にしよう…♡</p></div>"
+                            + "<img class='hero-cat' src='/static/assets/cat-header.png' alt='本の上で眠る三毛猫'>"
+                            + "</header>"
+                            + "<div class='workspace'>"
+                            + "<aside class='sidebar'>"
+                            + "<nav class='side-nav'>"
+                            + "<span class='nav-item inactive'><span class='nav-icon'>⌂</span><span>ホーム</span></span>"
+                            + "<span class='nav-item active'><span class='nav-icon nav-paw'><img src='/static/assets/paw.png' alt=''></span><span>やることリスト</span></span>"
+                            + "<span class='nav-item inactive'><span class='nav-icon'>▦</span><span>カレンダー</span></span>"
+                            + "<span class='nav-item inactive'><span class='nav-icon'><img class='nav-asset' src='/static/assets/notepad-pencil-icon.png' alt=''></span><span>ノート</span></span>"
+                            + "<span class='nav-item inactive'><span class='nav-icon'><img class='nav-asset' src='/static/assets/bar-chart-icon.png' alt=''></span><span>統計・ふりかえり</span></span>"
+                            + "<span class='nav-item inactive'><span class='nav-icon'>⚙</span><span>設定</span></span>"
+                            + "</nav>"
+                            + "<div class='sidebar-note'><img src='/static/assets/paw-duo.png' alt=''><p>コツコツやれば<br>きっとできるよ<br>にゃ…♡</p></div>"
+                            + "<img class='sidebar-cat' src='/static/assets/cat-sidebar.png' alt='座っている三毛猫'>"
+                            + "</aside>"
+                            + "<main class='main-content'>"
+                            + "<section class='toolbar-card'>"
+                            + "<div class='toolbar-decoration'><img class='toolbar-cat' src='/static/assets/cat-pencil-cup.png' alt='ペン立てから顔を出す猫'><div class='toolbar-bubble'><img src='/static/assets/speech-bubble-small-paw.png' alt=''><span>やることを<br>登録しよう…！</span></div><img class='toolbar-fish' src='/static/assets/fishbone-sticker.png' alt=''></div>");
                     String error = queryValue(query, "error");
                     String formTitle = error.isEmpty() ? titleSearch : URLDecoder.decode(queryValue(query, "todo"), StandardCharsets.UTF_8);
                     String formDeadline = error.isEmpty() ? deadlineSearch : URLDecoder.decode(queryValue(query, "deadline"), StandardCharsets.UTF_8);
-                    if ("todo".equals(error)) html.append("<p class='form-error'>\u300c\u3084\u308b\u3053\u3068\u300d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044</p>");
-                    if ("deadline".equals(error)) html.append("<p class='form-error'>\u300c\u7de0\u5207\u65e5\u300d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044</p>");
-                    if ("parent".equals(error)) html.append("<p class='form-error'>\u89aa\u30bf\u30b9\u30af\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044</p>");
-                    html.append("<form class='todo-toolbar' method='post' action='/add' novalidate><input type='hidden' id='selectedTaskId'><input type='hidden' id='selectedParentId' name='parentId' value=''><div class='input-row'>")
-                        .append("<label>\u3084\u308b\u3053\u3068<br><input name='todo' value='").append(escapeHtml(formTitle)).append("'></label>")
-                        .append("<label>\u7de0\u5207\u65e5<br><input name='deadline' placeholder='10/13' value='").append(escapeHtml(formDeadline)).append("'></label>")
-                        .append("<div class='action-buttons'><button class='btn btn-save'>\u767b\u9332</button><button class='btn btn-subtask' type='submit' id='subtaskButton' formaction='/add-subtask' disabled>\u30b5\u30d6\u30bf\u30b9\u30af\u767b\u9332</button>")
-                        .append("<button class='btn btn-search' type='button' id='searchButton'>\u691c\u7d22</button><button class='btn btn-edit' type='button' id='editButton'>\u7de8\u96c6</button><button class='btn btn-delete' type='button' id='deleteButton'>\u524a\u9664</button></div><div id='selectedTask' class='selected-task'><img src='/static/assets/paw.png' alt=''> \u9078\u629e\u4e2d\uff1a\u306a\u3057</div></div></form></section>");
-                    html.append("<nav class='todo-tabs'><a class='tab tab-all").append("all".equals(filter) ? " active" : "").append("' href='/?filter=all&amp;sort=desc'>\u5168\u90e8</a>")
-                        .append("<a class='tab tab-todo").append("todo".equals(filter) ? " active" : "").append("' href='/?filter=todo&amp;sort=desc'>\u3084\u308b\u3053\u3068</a>")
-                        .append("<a class='tab tab-doing").append("doing".equals(filter) ? " active" : "").append("' href='/?filter=doing&amp;sort=desc'>\u3084\u3063\u3066\u308b\u3053\u3068</a>")
-                        .append("<a class='tab tab-done").append("done".equals(filter) ? " active" : "").append("' href='/?filter=done&amp;sort=desc'>\u3084\u3063\u305f\u3053\u3068</a></nav><section class='list-card'>");
+                    if ("todo".equals(error)) html.append("<p class='form-error'>「やること」を入力してください</p>");
+                    if ("deadline".equals(error)) html.append("<p class='form-error'>「締切日」を入力してください</p>");
+                    if ("parent".equals(error)) html.append("<p class='form-error'>親タスクを選択してください</p>");
+                    html.append("<form class='todo-toolbar' method='post' action='/add' novalidate><input type='hidden' id='selectedTaskId'><input type='hidden' id='selectedParentId' name='parentId' value=''>")
+                        .append("<div class='input-row'>")
+                        .append("<label class='title-field'><span>内容</span><input name='todo' placeholder='やることを入力してください…　例）企画書を作成する' value='").append(escapeHtml(formTitle)).append("'></label>")
+                        .append("<label class='deadline-field'><span>締切日</span><input name='deadline' placeholder='10/13' value='").append(escapeHtml(formDeadline)).append("'></label>")
+                        .append("</div>")
+                        .append("<div class='action-buttons'>")
+                        .append("<button class='btn btn-save'><span class='button-symbol'>＋</span>登録</button>")
+                        .append("<button class='btn btn-subtask' type='submit' id='subtaskButton' formaction='/add-subtask' disabled><span class='button-symbol'>＋</span>サブタスク登録</button>")
+                        .append("<button class='btn btn-search' type='button' id='searchButton'><span class='button-symbol'>⌕</span>検索</button>")
+                        .append("<button class='btn btn-edit' type='button' id='editButton'><span class='button-symbol'>✎</span>編集</button>")
+                        .append("<button class='btn btn-delete' type='button' id='deleteButton'><span class='button-symbol'>⌫</span>削除</button>")
+                        .append("</div>")
+                        .append("<div id='selectedTask' class='selected-task'><img src='/static/assets/paw.png' alt=''><span>選択中：なし</span></div>")
+                        .append("</form></section>");
+                    html.append("<div class='tabs-row'><nav class='todo-tabs'>")
+                        .append("<a class='tab tab-all").append("all".equals(filter) ? " active" : "").append("' href='/?filter=all&amp;sort=desc'><img src='/static/assets/tab-icon-cat-all-white.png' alt=''><span>全部 <small>(").append(tabCounts[0]).append(")</small></span></a>")
+                        .append("<a class='tab tab-todo").append("todo".equals(filter) ? " active" : "").append("' href='/?filter=todo&amp;sort=desc'><img src='/static/assets/tab-icon-cat-todo-black.png' alt=''><span>やること <small>(").append(tabCounts[1]).append(")</small></span></a>")
+                        .append("<a class='tab tab-doing").append("doing".equals(filter) ? " active" : "").append("' href='/?filter=doing&amp;sort=desc'><img src='/static/assets/tab-icon-cat-doing-blue.png' alt=''><span>やってること <small>(").append(tabCounts[2]).append(")</small></span></a>")
+                        .append("<a class='tab tab-done").append("done".equals(filter) ? " active" : "").append("' href='/?filter=done&amp;sort=desc'><img src='/static/assets/tab-icon-cat-done-cream.png' alt=''><span>やったこと <small>(").append(tabCounts[3]).append(")</small></span></a>")
+                        .append("</nav><div class='tabs-tip'><img src='/static/assets/speech-bubble-small-paw.png' alt=''><span>タブで絞り込み表示<br>できるよ！</span></div></div>")
+                        .append("<section class='list-card'>");
                     if ("desc".equals(sort)) {
-                    html.append("<p class='sort-control'><a href='/?filter=").append(filter).append("&amp;sort=asc").append(htmlSearchParams).append("'>\u53e4\u3044\u9806</a></p>");
+                        html.append("<p class='sort-control'><a href='/?filter=").append(filter).append("&amp;sort=asc").append(htmlSearchParams).append("'>古い順</a></p>");
                     } else {
-                    html.append("<p class='sort-control'><a href='/?filter=").append(filter).append("&amp;sort=desc").append(htmlSearchParams).append("'>\u65b0\u3057\u3044\u9806</a></p>");
+                        html.append("<p class='sort-control'><a href='/?filter=").append(filter).append("&amp;sort=desc").append(htmlSearchParams).append("'>新しい順</a></p>");
                     }
                     html.append("<form id='deleteForm' method='post' action='/delete-selected'>")
                         .append("<input type='hidden' name='deleteIds' id='deleteTaskId'><input type='hidden' name='filter' value='").append(filter).append("'><input type='hidden' name='sort' value='").append(sort).append("'><input type='hidden' name='titleSearch' value='").append(escapeHtml(titleSearch)).append("'><input type='hidden' name='deadlineSearch' value='").append(escapeHtml(deadlineSearch)).append("'></form>")
+                        .append("<div class='notebook-holes' aria-hidden='true'></div>")
                         .append("<div class='todo-table'><div class='todo-header'>")
-                        .append("<span>\u2611</span><span>\u5185\u5bb9</span><span>\u767b\u9332\u65e5</span><span>\u958b\u59cb\u65e5</span><span>\u7de0\u5207\u65e5</span></div>")
+                        .append("<span>☑</span><span>内容</span><span>登録日</span><span>開始日</span><span>締切日</span></div>")
                         .append("<ul class='todo-list'>");
                     for (Todo todo : todos) {
                         boolean contextOnly = contextOnlyIds.contains(todo.getId());
                         String statusClass = todo.isDone() ? "status-done" : (todo.getStartDate() == null || todo.getStartDate().trim().isEmpty() ? "status-todo" : "status-doing");
-                        html.append("<li class='todo-row ").append(statusClass).append(" ").append(todo.getParentId() == null ? "parent-row" : "subtask-row").append(contextOnly ? " context-only" : " selectable-row").append("' data-id='").append(todo.getId()).append("' data-parent='").append(todo.getParentId() == null).append("' data-title='").append(escapeHtml(todo.getTitle())).append("' data-start='").append(escapeHtml(todo.getStartDate())).append("' data-deadline='").append(escapeHtml(todo.getDeadline())).append("'")
-                            .append(">")
-                            .append("<span>");
+                        html.append("<li class='todo-row ").append(statusClass).append(" ").append(todo.getParentId() == null ? "parent-row" : "subtask-row").append(contextOnly ? " context-only" : " selectable-row").append("' data-id='").append(todo.getId()).append("' data-parent='").append(todo.getParentId() == null).append("' data-title='").append(escapeHtml(todo.getTitle())).append("' data-start='").append(escapeHtml(todo.getStartDate())).append("' data-deadline='").append(escapeHtml(todo.getDeadline())).append("'>")
+                            .append("<span class='check-cell'>");
                         if (!contextOnly) {
-                            html.append("<a class='completion-toggle' href='/done?id=").append(todo.getId()).append("&amp;filter=").append(filter).append("&amp;sort=").append(sort).append(htmlSearchParams).append("'>").append(todo.isDone() ? "\u2611" : "\u2610").append("</a>");
+                            html.append("<a class='completion-toggle' href='/done?id=").append(todo.getId()).append("&amp;filter=").append(filter).append("&amp;sort=").append(sort).append(htmlSearchParams).append("'>").append(todo.isDone() ? "☑" : "☐").append("</a>");
                         }
                         html.append("</span><span class='task-content'>");
+                        html.append("<span class='task-title'>").append(escapeHtml(todo.getTitle())).append("</span>");
                         if (todo.isDone()) html.append("<img class='done-stamp' src='/static/assets/done-stamp.png' alt='済'>");
-                        html.append("<span class='task-title'>").append(escapeHtml(todo.getTitle())).append("</span></span>")
-                            .append("<span>").append(escapeHtml(todo.getRegisteredDate())).append("</span><span>").append(escapeHtml(todo.getStartDate())).append("</span><span>").append(escapeHtml(todo.getDeadline())).append("</span></li>");
+                        html.append("</span>")
+                            .append("<span class='date-cell'>").append(escapeHtml(todo.getRegisteredDate())).append("</span>")
+                            .append("<span class='date-cell'>").append(escapeHtml(todo.getStartDate())).append("</span>")
+                            .append("<span class='date-cell deadline-cell'>").append(escapeHtml(todo.getDeadline())).append("</span></li>");
                     }
                     html.append("</ul></div>");
                     html.append("<form id='editForm' method='post' action='/edit' class='hidden'><input type='hidden' name='id' id='editId'><input type='hidden' name='filter' value='").append(filter).append("'><input type='hidden' name='sort' value='").append(sort).append("'><input type='hidden' name='titleSearch' value='").append(escapeHtml(titleSearch)).append("'><input type='hidden' name='deadlineSearch' value='").append(escapeHtml(deadlineSearch)).append("'></form>");
                     html.append("</section>");
-                    html.append("<div id='editDialog' class='modal-overlay hidden'><div class='modal-card'><h2>\u30bf\u30b9\u30af\u3092\u7de8\u96c6</h2><label>\u5185\u5bb9<input id='editTitle' name='todo' form='editForm' required></label><label>\u958b\u59cb\u65e5<input id='editStart' name='startDate' form='editForm'></label><label>\u7de0\u5207\u65e5<input id='editDeadline' name='deadline' form='editForm' required></label><div class='modal-actions'><button class='btn btn-neutral' type='button' data-close='editDialog'>\u30ad\u30e3\u30f3\u30bb\u30eb</button><button class='btn btn-save' type='submit' form='editForm'>\u4fdd\u5b58</button></div></div></div>");
-                    html.append("<div id='deleteConfirm' class='modal-overlay hidden'><div class='modal-card compact-card'>")
-                        .append("<p id='deleteMessage'>\u524a\u9664\u5bfe\u8c61\u3067\u3059\u3002</p>")
-                        .append("<div class='modal-actions'><button class='btn btn-neutral' type='button' data-close='deleteConfirm'>\u30ad\u30e3\u30f3\u30bb\u30eb</button><button class='btn btn-delete' type='submit' form='deleteForm'>\u524a\u9664</button></div></div></div>");
-                    html.append("<script src='/todo.js' defer></script></main></div></body></html>");
+                    html.append("<div id='editDialog' class='modal-overlay hidden'><div class='modal-card'><img class='modal-paw' src='/static/assets/paw.png' alt=''><h2>タスクを編集</h2><label>内容<input id='editTitle' name='todo' form='editForm' required></label><label>開始日<input id='editStart' name='startDate' form='editForm'></label><label>締切日<input id='editDeadline' name='deadline' form='editForm' required></label><div class='modal-actions'><button class='btn btn-neutral' type='button' data-close='editDialog'>キャンセル</button><button class='btn btn-save' type='submit' form='editForm'>保存</button></div></div></div>");
+                    html.append("<div id='deleteConfirm' class='modal-overlay hidden'><div class='modal-card compact-card'><img class='modal-paw' src='/static/assets/paw.png' alt=''><p id='deleteMessage'>削除対象です。</p><div class='modal-actions'><button class='btn btn-neutral' type='button' data-close='deleteConfirm'>キャンセル</button><button class='btn btn-delete' type='submit' form='deleteForm'>削除</button></div></div></div>");
+                    html.append("<script src='/todo.js' defer></script></main></div></div></body></html>");
                     message = html.toString();
                     exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
                 } else { // ★ SQLite????
