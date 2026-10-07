@@ -425,7 +425,7 @@ public class App {
                             + "<link rel='preconnect' href='https://fonts.googleapis.com'>"
                             + "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>"
                             + "<link href='https://fonts.googleapis.com/css2?family=Hachi+Maru+Pop&family=Noto+Sans+JP:wght@400;500;600;700&display=swap' rel='stylesheet'>"
-                            + "<link rel='stylesheet' href='/todo.css'></head><body>"
+                            + "<link rel='stylesheet' href='/todo.css?v=4'></head><body>"
                             + "<div class='page-frame'>"
                             + "<header class='hero-header'>"
                             + "<div class='hero-brand'><img class='brand-cat-mark-image' src='/static/assets/tab-icon-cat-all-white.png' alt=''><div><p class='brand-title'>ねこと、はたらく。</p><p class='brand-copy'>かわいいToDoで<br>今日もいい日に…♪</p></div></div>"
@@ -447,7 +447,7 @@ public class App {
                             + "<img class='sidebar-cat' src='/static/assets/cat-sidebar.png' alt='座っている三毛猫'>"
                             + "</aside>"
                             + "<main class='main-content'>"
-                            + "<section class='toolbar-card'>"
+                            + "<section class='toolbar-card'><div class='toolbar-holes' aria-hidden='true'></div><div class='toolbar-margin-line' aria-hidden='true'></div>"
                             + "<div class='toolbar-decoration'><img class='toolbar-cat' src='/static/assets/cat-pencil-cup.png' alt='ペン立てから顔を出す猫'><div class='toolbar-bubble'><img src='/static/assets/speech-bubble-small-paw.png' alt=''><span>やることを<br>登録しよう…！</span></div><img class='toolbar-fish' src='/static/assets/fishbone-sticker.png' alt=''></div>");
                     String error = queryValue(query, "error");
                     String formTitle = error.isEmpty() ? titleSearch : URLDecoder.decode(queryValue(query, "todo"), StandardCharsets.UTF_8);

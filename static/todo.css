@@ -232,17 +232,28 @@ button, input { font-family: inherit; }
     repeating-linear-gradient(0deg, transparent 0 26px, rgba(219,201,179,.18) 26px 27px);
   box-shadow: var(--shadow);
 }
-.toolbar-card::before {
-  content: "";
+.toolbar-holes {
   position: absolute;
-  left: -7px;
-  top: 15px;
-  width: 13px;
-  height: 130px;
-  background: radial-gradient(circle, #e3cbb1 0 4px, transparent 4.5px) 0 0/13px 24px repeat-y;
+  z-index: 6;
+  left: 5px;
+  top: 13px;
+  bottom: 13px;
+  width: 30px;
+  background: radial-gradient(circle, #fffaf1 0 5px, #b89578 5.5px 7px, transparent 7.5px) center top / 28px 34px repeat-y;
+  pointer-events: none;
+}
+.toolbar-margin-line {
+  position: absolute;
+  z-index: 5;
+  left: 39px;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed rgba(188,145,126,.36);
+  pointer-events: none;
 }
 .toolbar-decoration {
   position: absolute;
+  z-index: 2;
   left: 10px;
   top: 7px;
   width: 205px;
@@ -449,9 +460,9 @@ input:focus { border-color: #cc8097; box-shadow: 0 0 0 3px rgba(204,128,151,.14)
 }
 .todo-row:last-child { border-bottom: 0; }
 .todo-row.selectable-row { cursor: pointer; }
-.todo-row.status-todo { background: rgba(255,249,231,.68); }
-.todo-row.status-doing { background: rgba(218,239,255,.70); }
-.todo-row.status-done { background: rgba(224,244,227,.76); }
+.todo-row.status-todo { background: #f9d9e0; }
+.todo-row.status-doing { background: #cfe8fa; }
+.todo-row.status-done { background: #fbe3a4; }
 .todo-row.selected-task-row {
   box-shadow: inset 6px 0 0 #ef758c;
   background-image: linear-gradient(90deg, rgba(255,203,214,.48), transparent 36%);
@@ -459,7 +470,7 @@ input:focus { border-color: #cc8097; box-shadow: 0 0 0 3px rgba(204,128,151,.14)
 .todo-row.context-only {
   cursor: default;
   color: #877b7b;
-  background: rgba(250,247,240,.78);
+  background: rgba(248,242,232,.95);
 }
 .check-cell { justify-content: center; }
 .completion-toggle {
@@ -480,7 +491,8 @@ input:focus { border-color: #cc8097; box-shadow: 0 0 0 3px rgba(204,128,151,.14)
   display: flex !important;
   gap: 8px;
   align-items: center;
-  font-weight: 500;
+  font-weight: 700;
+  letter-spacing: .03em;
 }
 .parent-row .task-title { font-weight: 700; }
 .task-title { min-width: 0; overflow-wrap: anywhere; }
@@ -502,11 +514,15 @@ input:focus { border-color: #cc8097; box-shadow: 0 0 0 3px rgba(204,128,151,.14)
   height: 35px;
   border-left: 1px dashed #c3aa9b;
 }
+.status-done .task-title,
+.status-done .date-cell {
+  color: #918983;
+}
 .status-done .task-title {
-  color: #8a8580;
   text-decoration: line-through;
   text-decoration-color: #9c9690;
 }
+.todo-row.status-done { opacity: 1; }
 .done-stamp {
   width: 34px;
   height: 34px;
@@ -515,7 +531,12 @@ input:focus { border-color: #cc8097; box-shadow: 0 0 0 3px rgba(204,128,151,.14)
   order: 2;
   filter: saturate(.95);
 }
-.date-cell { justify-content: center; color: #6e6570; font-size: 11px; }
+.date-cell {
+  justify-content: center;
+  color: #6e6570;
+  font: 12px/1.2 var(--hand);
+  letter-spacing: .03em;
+}
 .deadline-cell { color: #695963; }
 
 /* ---------- MODALS ---------- */
